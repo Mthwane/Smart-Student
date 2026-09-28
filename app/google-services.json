@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "733528452745",
+    "project_id": "smartstudent-173da",
+    "storage_bucket": "smartstudent-173da.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:733528452745:android:73c732c6e860cf82f4e058",
+        "android_client_info": {
+          "package_name": "com.example.smartstudent"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "733528452745-vl993l4qeplodlvet41d6mgf24r4p424.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBQnXb-io7B5YWPZA_w70Q5ucWBPv0DAbA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "733528452745-vl993l4qeplodlvet41d6mgf24r4p424.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

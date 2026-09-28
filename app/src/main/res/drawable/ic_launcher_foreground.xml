@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple bold "S" glyph in white, centered in the safe zone -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M60,34 C60,28 54,24 46,24 C37,24 31,29 31,36 C31,52 58,45 58,60 C58,68 51,72 43,72 C34,72 27,68 27,61"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <!-- Accent green dot, echoing the Oportun-style brand mark -->
+    <path
+        android:fillColor="#1E9E5A"
+        android:pathData="M64,30 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0" />
+</vector>
