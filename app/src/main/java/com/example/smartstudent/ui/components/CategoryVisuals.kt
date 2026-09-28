@@ -15,11 +15,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.smartstudent.theme.CategoryChartPalette
 import com.example.smartstudent.theme.StudentGreen
+import androidx.compose.material.icons.filled.Savings
 
 /** Picks a friendly icon for a free-text transaction category, matched loosely by keyword. */
 fun categoryIcon(category: String): ImageVector {
     val c = category.lowercase()
     return when {
+        "saving" in c -> Icons.Filled.Savings
         "coffee" in c || "cafe" in c || "dining" in c || "food" in c -> Icons.Filled.LocalCafe
         "book" in c || "education" in c || "tuition" in c || "school" in c -> Icons.Filled.MenuBook
         "transit" in c || "transport" in c || "uber" in c || "taxi" in c || "bus" in c -> Icons.Filled.DirectionsBus

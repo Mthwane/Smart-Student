@@ -1,0 +1,5 @@
+# Copy to local.properties (never commit or zip that file).
+sdk.dir=/path/to/Android/Sdk
+gemini.api.key=YOUR_NEW_KEY_HERE
+# Optional: override the Gemini model. thinkingLevel is a Gemini 3 setting.
+# gemini.model=gemini-3.6-flash

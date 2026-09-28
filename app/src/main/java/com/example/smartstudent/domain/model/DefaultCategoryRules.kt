@@ -40,16 +40,23 @@ object DefaultCategoryRules {
         CategoryRule("r29", "electric", "Utilities"),
         CategoryRule("r30", "airtime", "Utilities"),
         CategoryRule("r31", "data bundle", "Utilities"),
-        CategoryRule("r32", "wifi", "Utilities")
+        CategoryRule("r32", "wifi", "Utilities"),
+        CategoryRule("r33", "uber eats", "Dining", priority = 10),
+        CategoryRule("r34", "mr d", "Dining", priority = 10),
+        CategoryRule("r35", "kfc", "Dining"),
+        CategoryRule("r36", "nandos", "Dining"),
+        CategoryRule("r37", "mcdonald", "Dining"),
+        CategoryRule("r38", "rental", "Rent")
     )
 
     /** The default set of categories offered even before the user has any transactions. */
     val defaultCategories: List<String> = listOf(
-        "Groceries", "Coffee", "Transport", "Rent", "Entertainment",
-        "Cosmetics", "Utilities", "Income", "Transfer", "Other"
+        "Groceries", "Coffee", "Dining", "Transport", "Rent", "Entertainment",
+        "Cosmetics", "Utilities", "Savings", "Income", "Transfer", "Other"
     )
 
     /** Best-guess category for a transaction title, or null if nothing matches. */
     fun suggest(title: String): String? =
-        rules.sortedByDescending { it.priority }.firstOrNull { it.matches(title) }?.category
+        rules.sortedWith(compareByDescending<CategoryRule> { it.priority }.thenByDescending { it.matchKeyword.length })
+            .firstOrNull { it.matches(title) }?.category
 }

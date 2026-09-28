@@ -60,14 +60,15 @@ import com.example.smartstudent.ui.components.MascotMood
 import com.example.smartstudent.ui.components.StudentTextField
 import com.example.smartstudent.ui.components.buildPieSlices
 import com.example.smartstudent.ui.main.HabitTipState
+import com.example.smartstudent.util.editableAmount
+import com.example.smartstudent.util.parseAmount
 
 @Composable
 fun AnalyticsScreen(
     monthlyIncome: Double,
     monthlyExpenses: Double,
-    incomeToExpenseRatio: Double?,
     averageExpenseAmount: Double,
-    transactionCount: Int,
+    monthlyTransactionCount: Int,
     categorySpendTotals: Map<String, Double>,
     monthlyAllowance: Double,
     allowanceRemaining: Double,
@@ -78,12 +79,13 @@ fun AnalyticsScreen(
     val overBudget = monthlyAllowance > 0.0 && allowanceRemaining < 0
     val usedFraction = if (monthlyAllowance > 0.0) (monthlyExpenses / monthlyAllowance).toFloat().coerceIn(0f, 1f) else 0f
     val usedPct = (usedFraction * 100).toInt()
+    val inOutRatio = if (monthlyExpenses > 0.0) monthlyIncome / monthlyExpenses else null
     val slices = buildPieSlices(categorySpendTotals)
     var showAllowanceDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         item {
@@ -126,7 +128,7 @@ fun AnalyticsScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatTile(
                     label = "In/Out Ratio",
-                    value = incomeToExpenseRatio?.let { "%.2fx".format(if (it > 0) 1 / it else 0.0) } ?: "—",
+                    value = inOutRatio?.let { "%.2fx".format(it) } ?: "—",
                     icon = Icons.Filled.Balance,
                     iconColor = StudentGold,
                     modifier = Modifier.weight(1f)
@@ -137,7 +139,7 @@ fun AnalyticsScreen(
                     icon = Icons.Filled.Receipt,
                     iconColor = StudentBrown800,
                     modifier = Modifier.weight(1f),
-                    caption = "$transactionCount transactions"
+                    caption = "$monthlyTransactionCount this month"
                 )
             }
         }
@@ -203,18 +205,20 @@ private fun BudgetAllowanceCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Monthly Budget Allowance", style = MaterialTheme.typography.titleMedium, color = StudentBrown600)
-            Box(
-                modifier = Modifier
-                    .clip(PillShape)
-                    .background(if (overBudget) StudentRed.copy(alpha = 0.14f) else StudentGreen.copy(alpha = 0.14f))
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    if (overBudget) "Over Budget" else "On Track",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (overBudget) StudentRed else StudentGreen,
-                    fontWeight = FontWeight.Bold
-                )
+            if (monthlyAllowance > 0.0) {
+                Box(
+                    modifier = Modifier
+                        .clip(PillShape)
+                        .background(if (overBudget) StudentRed.copy(alpha = 0.14f) else StudentGreen.copy(alpha = 0.14f))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        if (overBudget) "Over Budget" else "On Track",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (overBudget) StudentRed else StudentGreen,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
         Spacer(modifier = Modifier.height(4.dp))
@@ -346,8 +350,8 @@ private fun SetAllowanceDialog(
     onDismiss: () -> Unit,
     onConfirm: (Double) -> Unit
 ) {
-    var amountText by remember { mutableStateOf(if (currentAmount > 0.0) "%.2f".format(currentAmount) else "") }
-    val amount = amountText.toDoubleOrNull()
+    var amountText by remember { mutableStateOf(if (currentAmount > 0.0) editableAmount(currentAmount) else "") }
+    val amount = parseAmount(amountText)
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,

@@ -9,6 +9,8 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.tasks.await
+import com.google.firebase.FirebaseException
+import com.example.smartstudent.util.AppLogger
 
 /**
  * Wraps Firebase Authentication for email/password (with real verification emails)
@@ -26,7 +28,9 @@ class AuthRepository(
     suspend fun signUpWithEmail(email: String, password: String): FirebaseUser {
         val result = auth.createUserWithEmailAndPassword(email, password).await()
         val user = result.user ?: error("Sign up succeeded but no user was returned")
-        user.sendEmailVerification().await()
+        // Best effort: the account exists either way, and the user can tap "Resend".
+        try { user.sendEmailVerification().await() }
+        catch (e: FirebaseException) { AppLogger.e("signUp/verificationEmail", e) }
         return user
     }
 
@@ -51,8 +55,14 @@ class AuthRepository(
         return result.user ?: error("Google sign-in succeeded but no user was returned")
     }
 
-    fun signOut() {
+    suspend fun sendPasswordReset(email: String) {
+        auth.sendPasswordResetEmail(email.trim()).await()
+    }
+
+    fun signOut(context: Context? = null) {
         auth.signOut()
+        // Also clear the Google session so the account chooser appears next time.
+        context?.let { runCatching { buildGoogleSignInClient(it)?.signOut() } }
     }
 
     /**

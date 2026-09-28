@@ -22,11 +22,24 @@ import com.example.smartstudent.domain.model.Transaction
 import com.example.smartstudent.domain.model.TransactionType
 import com.example.smartstudent.domain.model.User
 import com.example.smartstudent.util.AppLogger
+import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.FirebaseTooManyRequestsException
+import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseUser
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.YearMonth
 import java.time.format.DateTimeParseException
+import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 
 /**
  * Shared app state backed by real Firebase repositories (Auth + Firestore).
@@ -46,25 +59,29 @@ class AppViewModel(
     private val geminiRepository: GeminiRepository = GeminiRepository()
 ) : ViewModel() {
 
-    var currentUser by mutableStateOf<User?>(null)
-        private set
-
-    var transactions by mutableStateOf<List<Transaction>>(emptyList())
-        private set
-
-    var goals by mutableStateOf<List<SavingsGoal>>(emptyList())
-        private set
-
-    var isLoading by mutableStateOf(false)
-        private set
+    var currentUser by mutableStateOf<User?>(null); private set
+    var transactions by mutableStateOf<List<Transaction>>(emptyList()); private set
+    var goals by mutableStateOf<List<SavingsGoal>>(emptyList()); private set
+    var isLoading by mutableStateOf(false); private set
 
     /** Short, user-safe message only. See ERROR HANDLING POLICY above. */
-    var errorMessage by mutableStateOf<String?>(null)
-        private set
+    var errorMessage by mutableStateOf<String?>(null); private set
 
-    fun dismissError() {
-        errorMessage = null
-    }
+    /** Short, user-safe informational message (e.g. "Password reset email sent."). */
+    var infoMessage by mutableStateOf<String?>(null); private set
+
+    fun dismissError() { errorMessage = null }
+    fun dismissInfo() { infoMessage = null }
+
+    /** Lets the UI layer surface an error it detected itself (e.g. a cancelled/failed Google sign-in). */
+    fun reportError(message: String) { errorMessage = message }
+
+    /** Always the live Firebase uid, so writes never silently no-op just because the profile hasn't loaded yet. */
+    private val uid: String? get() = authRepository.currentUser?.uid
+
+    // --- clock, so "this month" rolls over correctly if the app is left open across midnight on the 1st ---
+    private var today by mutableStateOf(LocalDate.now())
+    fun refreshClock() { val now = LocalDate.now(); if (now != today) today = now }
 
     val balance: Double by derivedStateOf {
         transactions.sumOf { if (it.type == TransactionType.INCOME) it.amount else -it.amount }
@@ -72,18 +89,16 @@ class AppViewModel(
 
     // --- Analytics ---
     //
-    // These all used to be plain `get()` properties that re-scanned the FULL transaction
-    // list from scratch every single time anything read them — and Compose re-reads them
-    // on every recomposition of Dashboard/Analytics, so a single screen redraw could mean
-    // several full passes over transactions. `derivedStateOf` caches the result and only
-    // recomputes when `transactions` (or `currentUser`, for allowance) actually changes,
-    // which is what makes those screens feel noticeably snappier once there's more than a
-    // handful of transactions (e.g. right after a bank statement scan adds a bunch at once).
+    // These use derivedStateOf so they're cached and only recomputed when `transactions`,
+    // `currentUser`, or `today` actually change, rather than re-scanning the full list on
+    // every recomposition of Dashboard/Analytics.
 
     private val thisMonthTransactions: List<Transaction> by derivedStateOf {
-        val now = LocalDateTime.now()
-        transactions.filter { it.date.month == now.month && it.date.year == now.year }
+        val month = YearMonth.from(today)
+        transactions.filter { YearMonth.from(it.date) == month }
     }
+
+    val monthlyTransactionCount: Int by derivedStateOf { thisMonthTransactions.size }
 
     val monthlyIncome: Double by derivedStateOf {
         thisMonthTransactions.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
@@ -110,42 +125,93 @@ class AppViewModel(
             .mapValues { (_, txns) -> txns.sumOf { it.amount } }
     }
 
-    val monthlyAllowance: Double by derivedStateOf {
-        currentUser?.monthlyAllowance ?: 0.0
-    }
+    val monthlyAllowance: Double by derivedStateOf { currentUser?.monthlyAllowance ?: 0.0 }
+    val allowanceRemaining: Double by derivedStateOf { monthlyAllowance - monthlyExpenses }
 
-    val allowanceRemaining: Double by derivedStateOf {
-        monthlyAllowance - monthlyExpenses
-    }
+    // --- helpers ---
 
-    fun setMonthlyAllowance(amount: Double) {
-        val uid = currentUser?.id ?: return
-        currentUser = currentUser?.copy(monthlyAllowance = amount)
+    private inline fun launchCatching(
+        tag: String,
+        userMessage: String,
+        crossinline onFailure: () -> Unit = {},
+        crossinline block: suspend () -> Unit
+    ) {
         viewModelScope.launch {
             try {
-                userRepository.setMonthlyAllowance(uid, amount)
+                block()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                AppLogger.e("setMonthlyAllowance", e)
-                errorMessage = "Couldn't save your allowance. Please try again."
+                AppLogger.e(tag, e)
+                onFailure()
+                errorMessage = userMessage
             }
         }
     }
 
-    val isEmailVerified: Boolean
-        get() = authRepository.currentUser?.isEmailVerified ?: false
+    private fun splitName(name: String?): Pair<String, String> {
+        val parts = (name ?: "").trim().split(" ", limit = 2)
+        return parts.getOrElse(0) { "" } to parts.getOrElse(1) { "" }
+    }
 
-    val pendingVerificationEmail: String
-        get() = authRepository.currentUser?.email ?: ""
+    private fun fallbackUser(firebaseUser: FirebaseUser): User {
+        val (first, last) = splitName(firebaseUser.displayName)
+        return User(id = firebaseUser.uid, firstName = first, lastName = last, email = firebaseUser.email.orEmpty())
+    }
+
+    /** Loads profile + transactions + goals together and AWAITS it, so callers never move on with stale/empty data. */
+    private suspend fun loadAllSafely(firebaseUser: FirebaseUser) {
+        val (first, last) = splitName(firebaseUser.displayName)
+        try {
+            coroutineScope {
+                val profileDeferred = async {
+                    userRepository.getOrCreateProfile(firebaseUser.uid, first, last, firebaseUser.email.orEmpty())
+                }
+                val transactionsDeferred = async { transactionRepository.getAll(firebaseUser.uid) }
+                val goalsDeferred = async { goalRepository.getAll(firebaseUser.uid) }
+                currentUser = profileDeferred.await()
+                transactions = transactionsDeferred.await()
+                goals = goalsDeferred.await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLogger.e("loadAll", e)
+            if (currentUser?.id != firebaseUser.uid) currentUser = fallbackUser(firebaseUser)
+            errorMessage = "Couldn't load your data. Check your connection and try again."
+        }
+    }
+
+    /** Re-syncs from the server. Used as the rollback path after a multi-write operation partially fails. */
+    fun reload() {
+        val firebaseUser = authRepository.currentUser ?: return
+        viewModelScope.launch { loadAllSafely(firebaseUser) }
+    }
+
+    // --- auth ---
+
+    val isEmailVerified: Boolean get() = authRepository.currentUser?.isEmailVerified ?: false
+    val pendingVerificationEmail: String get() = authRepository.currentUser?.email ?: ""
 
     fun signUp(firstName: String, lastName: String, email: String, password: String, onDone: (success: Boolean) -> Unit) {
         errorMessage = null
         isLoading = true
         viewModelScope.launch {
             try {
-                val firebaseUser = authRepository.signUpWithEmail(email, password)
-                userRepository.createProfile(firebaseUser.uid, firstName, lastName, email)
-                currentUser = User(id = firebaseUser.uid, firstName = firstName, lastName = lastName, email = email)
+                val firebaseUser = authRepository.signUpWithEmail(email.trim(), password)
+                // Optimistic: the auth account now exists either way, so let the user proceed to
+                // email verification even if the profile write below fails; it's recreated on next login.
+                currentUser = User(id = firebaseUser.uid, firstName = firstName, lastName = lastName, email = email.trim())
+                try {
+                    userRepository.getOrCreateProfile(firebaseUser.uid, firstName, lastName, email.trim())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLogger.e("signUp/profile", e)
+                }
                 onDone(true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLogger.e("signUp", e)
                 errorMessage = friendlyAuthMessage(e, fallback = "Couldn't create your account. Please try again.")
@@ -161,10 +227,11 @@ class AppViewModel(
         isLoading = true
         viewModelScope.launch {
             try {
-                val firebaseUser = authRepository.signInWithEmail(email, password)
-                loadUserProfile(firebaseUser.uid)
-                loadData()
+                val firebaseUser = authRepository.signInWithEmail(email.trim(), password)
+                loadAllSafely(firebaseUser)   // awaited: the dashboard never shows empty/R0.00 first
                 onDone(true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLogger.e("logIn", e)
                 errorMessage = friendlyAuthMessage(e, fallback = "Couldn't log you in. Check your email and password.")
@@ -175,9 +242,7 @@ class AppViewModel(
         }
     }
 
-    fun googleSignInAvailable(context: Context): Boolean =
-        authRepository.buildGoogleSignInClient(context) != null
-
+    fun googleSignInAvailable(context: Context): Boolean = authRepository.buildGoogleSignInClient(context) != null
     fun googleSignInClient(context: Context) = authRepository.buildGoogleSignInClient(context)
 
     fun completeGoogleSignIn(idToken: String, onDone: (success: Boolean) -> Unit) {
@@ -186,13 +251,10 @@ class AppViewModel(
         viewModelScope.launch {
             try {
                 val firebaseUser = authRepository.signInWithGoogleCredential(idToken)
-                val nameParts = (firebaseUser.displayName ?: "").split(" ", limit = 2)
-                val first = nameParts.getOrElse(0) { "" }
-                val last = nameParts.getOrElse(1) { "" }
-                userRepository.createProfile(firebaseUser.uid, first, last, firebaseUser.email ?: "")
-                currentUser = User(id = firebaseUser.uid, firstName = first, lastName = last, email = firebaseUser.email ?: "")
-                loadData()
+                loadAllSafely(firebaseUser)   // get-or-create: an existing profile's allowance/prefs survive
                 onDone(true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLogger.e("completeGoogleSignIn", e)
                 errorMessage = "Google sign-in didn't go through. Please try again."
@@ -203,15 +265,29 @@ class AppViewModel(
         }
     }
 
+    fun sendPasswordReset(email: String) {
+        if (!email.contains("@")) {
+            errorMessage = "Enter your email address first."
+            return
+        }
+        launchCatching("passwordReset", "Couldn't send the reset email. Please try again.") {
+            authRepository.sendPasswordReset(email)
+            infoMessage = "If an account exists for that email, a reset link is on its way."
+        }
+    }
+
     /** Signs out and clears all in-memory state so nothing from the previous account lingers. */
-    fun logOut() {
-        authRepository.signOut()
+    fun logOut(context: Context) {
+        scanJob?.cancel()
+        tipJob?.cancel()
+        authRepository.signOut(context.applicationContext)
         currentUser = null
         transactions = emptyList()
         goals = emptyList()
         scanState = StatementScanState.Idle
         habitTipState = HabitTipState.Idle
         errorMessage = null
+        infoMessage = null
     }
 
     /**
@@ -225,35 +301,46 @@ class AppViewModel(
             onResult(AutoLoginResult.LOGGED_OUT)
             return
         }
-        if (!firebaseUser.isEmailVerified) {
-            onResult(AutoLoginResult.LOGGED_IN_UNVERIFIED)
-            return
-        }
         isLoading = true
         viewModelScope.launch {
             try {
-                currentUser = userRepository.getProfile(firebaseUser.uid)
-                transactions = transactionRepository.getAll(firebaseUser.uid)
-                goals = goalRepository.getAll(firebaseUser.uid)
-                onResult(AutoLoginResult.LOGGED_IN_VERIFIED)
-            } catch (e: Exception) {
-                AppLogger.e("tryAutoLogin", e)
-                // Fail safe: if we can't load their data, don't strand them on a broken
-                // Dashboard — send them back through a normal login instead.
-                onResult(AutoLoginResult.LOGGED_OUT)
+                val verified = try {
+                    authRepository.refreshEmailVerifiedStatus()
+                } catch (e: FirebaseAuthInvalidUserException) {
+                    // Account deleted/disabled server-side — the local session is stale.
+                    authRepository.signOut()
+                    onResult(AutoLoginResult.LOGGED_OUT)
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLogger.e("autoLogin/reload", e)
+                    firebaseUser.isEmailVerified   // offline: fall back to the last-known flag
+                }
+
+                if (!verified) {
+                    currentUser = fallbackUser(firebaseUser)
+                    onResult(AutoLoginResult.LOGGED_IN_UNVERIFIED)
+                } else {
+                    loadAllSafely(firebaseUser)   // offline/failure still lands on the dashboard, with a message
+                    onResult(AutoLoginResult.LOGGED_IN_VERIFIED)
+                }
             } finally {
                 isLoading = false
             }
         }
     }
 
-    fun resendVerificationEmail() {
+    fun resendVerificationEmail(onResult: (success: Boolean) -> Unit) {
         viewModelScope.launch {
             try {
                 authRepository.resendVerificationEmail()
+                onResult(true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLogger.e("resendVerificationEmail", e)
-                errorMessage = "Couldn't resend the email right now. Please try again shortly."
+                onResult(false)
             }
         }
     }
@@ -263,263 +350,261 @@ class AppViewModel(
         viewModelScope.launch {
             val verified = try {
                 authRepository.refreshEmailVerifiedStatus()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLogger.e("checkEmailVerified", e)
                 errorMessage = "Couldn't check verification status. Please try again."
                 false
             }
+            // Previously this only re-loaded transactions/goals and left currentUser null,
+            // so every write made right after verifying (uid ?: return) silently did nothing.
+            if (verified) authRepository.currentUser?.let { loadAllSafely(it) }
             isLoading = false
-            if (verified) loadData()
             onResult(verified)
         }
     }
 
+    // --- profile ---
+
     fun setNotificationsEnabled(enabled: Boolean) {
-        val uid = currentUser?.id ?: return
+        val u = uid ?: return
+        val previous = currentUser?.notificationsEnabled ?: false
         currentUser = currentUser?.copy(notificationsEnabled = enabled)
-        viewModelScope.launch {
-            try {
-                userRepository.setNotificationsEnabled(uid, enabled)
-            } catch (e: Exception) {
-                AppLogger.e("setNotificationsEnabled", e)
-                errorMessage = "Couldn't save that preference. Please try again."
-            }
+        launchCatching(
+            "setNotificationsEnabled", "Couldn't save that preference. Please try again.",
+            onFailure = { currentUser = currentUser?.copy(notificationsEnabled = previous) }
+        ) {
+            userRepository.setNotificationsEnabled(u, enabled)
         }
     }
 
+    fun setMonthlyAllowance(amount: Double) {
+        val u = uid ?: return
+        if (!amount.isFinite() || amount <= 0.0) {
+            errorMessage = "Enter an amount greater than zero."
+            return
+        }
+        val previous = currentUser?.monthlyAllowance ?: 0.0
+        currentUser = currentUser?.copy(monthlyAllowance = amount)
+        launchCatching(
+            "setMonthlyAllowance", "Couldn't save your allowance. Please try again.",
+            onFailure = { currentUser = currentUser?.copy(monthlyAllowance = previous) }
+        ) {
+            userRepository.setMonthlyAllowance(u, amount)
+        }
+    }
+
+    // --- transactions ---
+
     fun addTransaction(title: String, amount: Double, category: String, type: TransactionType = TransactionType.EXPENSE) {
-        val uid = currentUser?.id ?: return
+        val u = uid ?: return
+        if (!amount.isFinite() || amount <= 0.0) {
+            errorMessage = "Enter an amount greater than zero."
+            return
+        }
         val transaction = Transaction(
             id = UUID.randomUUID().toString(),
-            title = title,
+            title = title.trim(),
             amount = amount,
             type = type,
-            category = category,
+            category = category.ifBlank { "Other" },
             date = LocalDateTime.now()
         )
         transactions = transactions + transaction
-        viewModelScope.launch {
-            try {
-                transactionRepository.add(uid, transaction)
-            } catch (e: Exception) {
-                AppLogger.e("addTransaction", e)
-                errorMessage = "Couldn't save that transaction. Please try again."
-            }
+        launchCatching(
+            "addTransaction", "Couldn't save that transaction. Please try again.",
+            onFailure = { transactions = transactions.filterNot { it.id == transaction.id } }
+        ) {
+            transactionRepository.add(u, transaction)
         }
     }
 
-    /** Edits an existing transaction in place (title/amount/category/type), keeping its id and date. */
-    fun updateTransaction(transactionId: String, title: String, amount: Double, category: String, type: TransactionType) {
-        val uid = currentUser?.id ?: return
-        val existing = transactions.find { it.id == transactionId } ?: return
-        val updated = existing.copy(title = title, amount = amount, category = category, type = type)
-        transactions = transactions.map { if (it.id == transactionId) updated else it }
-        viewModelScope.launch {
-            try {
-                transactionRepository.update(uid, updated)
-            } catch (e: Exception) {
-                AppLogger.e("updateTransaction", e)
-                errorMessage = "Couldn't save those changes. Please try again."
-            }
+    fun updateTransaction(id: String, title: String, amount: Double, category: String, type: TransactionType) {
+        val u = uid ?: return
+        if (!amount.isFinite() || amount <= 0.0) {
+            errorMessage = "Enter an amount greater than zero."
+            return
+        }
+        val existing = transactions.find { it.id == id } ?: return
+        val updated = existing.copy(title = title.trim(), amount = amount, category = category, type = type)
+        transactions = transactions.map { if (it.id == id) updated else it }
+        launchCatching(
+            "updateTransaction", "Couldn't save those changes. Please try again.",
+            onFailure = { transactions = transactions.map { if (it.id == id) existing else it } }
+        ) {
+            transactionRepository.update(u, updated)
         }
     }
 
-    fun deleteTransaction(transactionId: String) {
-        val uid = currentUser?.id ?: return
-        transactions = transactions.filterNot { it.id == transactionId }
-        viewModelScope.launch {
-            try {
-                transactionRepository.delete(uid, transactionId)
-            } catch (e: Exception) {
-                AppLogger.e("deleteTransaction", e)
-                errorMessage = "Couldn't delete that transaction. Please try again."
-            }
+    fun deleteTransaction(id: String) {
+        val u = uid ?: return
+        val existing = transactions.find { it.id == id } ?: return
+        transactions = transactions.filterNot { it.id == id }
+        launchCatching(
+            "deleteTransaction", "Couldn't delete that transaction. Please try again.",
+            onFailure = { transactions = transactions + existing }
+        ) {
+            transactionRepository.delete(u, id)
         }
     }
 
-    fun addGoal(name: String, kind: GoalKind, targetAmount: Double, emoji: String, description: String = "") {
-        val uid = currentUser?.id ?: return
+    // --- goals ---
+
+    fun addGoal(name: String, kind: GoalKind, targetAmount: Double, emoji: String, description: String = "", dueDate: LocalDate? = null) {
+        val u = uid ?: return
+        if (!targetAmount.isFinite() || targetAmount <= 0.0) {
+            errorMessage = "Enter a target greater than zero."
+            return
+        }
         val goal = SavingsGoal(
             id = UUID.randomUUID().toString(),
-            name = name,
+            name = name.trim(),
             kind = kind,
             targetAmount = targetAmount,
             savedAmount = 0.0,
+            dueDate = dueDate,
             emoji = emoji,
-            description = description
+            description = description.trim()
         )
         goals = goals + goal
-        viewModelScope.launch {
-            try {
-                goalRepository.add(uid, goal)
-            } catch (e: Exception) {
-                AppLogger.e("addGoal", e)
-                errorMessage = "Couldn't save that goal. Please try again."
-            }
+        launchCatching(
+            "addGoal", "Couldn't save that goal. Please try again.",
+            onFailure = { goals = goals.filterNot { it.id == goal.id } }
+        ) {
+            goalRepository.add(u, goal)
         }
     }
 
-    /** Adds a contribution to an existing goal's saved amount ("Add money"). */
+    /** Adds to a goal AND records the matching "Savings" expense so the balance reflects the money set aside. */
     fun addMoneyToGoal(goalId: String, amount: Double) {
-        val uid = currentUser?.id ?: return
+        val u = uid ?: return
+        if (!amount.isFinite() || amount <= 0.0) {
+            errorMessage = "Enter an amount greater than zero."
+            return
+        }
         val target = goals.find { it.id == goalId } ?: return
-        val updated = target.copy(savedAmount = target.savedAmount + amount)
-        goals = goals.map { if (it.id == goalId) updated else it }
-        viewModelScope.launch {
-            try {
-                goalRepository.update(uid, updated)
-            } catch (e: Exception) {
-                AppLogger.e("addMoneyToGoal", e)
-                errorMessage = "Couldn't add that money. Please try again."
-            }
+        val updatedGoal = target.copy(savedAmount = target.savedAmount + amount)
+        val transaction = Transaction(
+            id = UUID.randomUUID().toString(),
+            title = "Saved for ${target.name}",
+            amount = amount,
+            type = TransactionType.EXPENSE,
+            category = "Savings",
+            date = LocalDateTime.now()
+        )
+        goals = goals.map { if (it.id == goalId) updatedGoal else it }
+        transactions = transactions + transaction
+        launchCatching(
+            "addMoneyToGoal", "Couldn't add that money. Please try again.",
+            onFailure = { reload() }   // two writes involved: resync rather than guess what landed
+        ) {
+            goalRepository.update(u, updatedGoal)
+            transactionRepository.add(u, transaction)
         }
     }
 
     fun deleteGoal(goalId: String) {
-        val uid = currentUser?.id ?: return
+        val u = uid ?: return
+        val existing = goals.find { it.id == goalId } ?: return
         goals = goals.filterNot { it.id == goalId }
-        viewModelScope.launch {
-            try {
-                goalRepository.delete(uid, goalId)
-            } catch (e: Exception) {
-                AppLogger.e("deleteGoal", e)
-                errorMessage = "Couldn't delete that goal. Please try again."
-            }
+        launchCatching(
+            "deleteGoal", "Couldn't delete that goal. Please try again.",
+            onFailure = { goals = goals + existing }
+        ) {
+            goalRepository.delete(u, goalId)
         }
     }
 
-    // --- Bank statement scanning (OCR + Gemini) ---
+    // --- statement scanning ---
 
-    var scanState by mutableStateOf<StatementScanState>(StatementScanState.Idle)
-        private set
+    var scanState by mutableStateOf<StatementScanState>(StatementScanState.Idle); private set
+    private var scanJob: Job? = null
 
-    /** Runs on-device OCR on the picked file, then sends the extracted text to Gemini for analysis. */
     fun scanStatement(context: Context, uri: Uri) {
+        if (scanState is StatementScanState.Loading) return
         scanState = StatementScanState.Loading
-        viewModelScope.launch {
+        val app = context.applicationContext   // never hold an Activity reference in a ViewModel coroutine
+        scanJob = viewModelScope.launch {
             try {
-                val text = OcrHelper.extractText(context, uri)
+                val text = OcrHelper.extractText(app, uri)
                 if (text.isBlank()) {
-                    AppLogger.w("scanStatement", "OCR returned blank text for uri=$uri")
                     scanState = StatementScanState.Error(
                         "Couldn't read any text from that file. Try a clearer photo or a text-based PDF."
                     )
                     return@launch
                 }
-                val analysis = geminiRepository.analyzeStatement(
-                    statementText = text,
-                    currentGoals = goals,
-                    monthlyAllowance = monthlyAllowance
-                )
+                val analysis = geminiRepository.analyzeStatement(text, goals, monthlyAllowance)
                 scanState = StatementScanState.Success(analysis)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // Full technical detail is always logged (Logcat tag "scanStatement"); a
-                // short version is also shown in the UI so a bad API key/model/quota issue
-                // is visible without needing to plug into Logcat.
                 AppLogger.e("scanStatement", e)
                 scanState = StatementScanState.Error(
-                    "We couldn't analyze that statement right now (${e.message ?: "unknown error"}). Please try again in a moment."
+                    if (e is IOException) "Check your internet connection and try again."
+                    else "We couldn't analyze that statement right now. Please try again in a moment."
                 )
             }
         }
     }
 
-    fun resetScanState() {
-        scanState = StatementScanState.Idle
-    }
+    fun cancelScan() { scanJob?.cancel(); scanState = StatementScanState.Idle }
+    fun resetScanState() { scanState = StatementScanState.Idle }
 
-    /** Imports the parsed transactions the user confirmed from a scan result. */
+    private fun dedupeKey(date: LocalDate, amount: Double, title: String) =
+        "$date|${String.format(Locale.US, "%.2f", amount)}|${title.trim().lowercase()}"
+
     fun importScannedTransactions(parsed: List<ParsedTransaction>) {
-        val uid = currentUser?.id ?: return
-        val newTransactions = parsed.map { p ->
+        val u = uid ?: return
+        val existingKeys = transactions.map { dedupeKey(it.date.toLocalDate(), it.amount, it.title) }.toHashSet()
+
+        val candidates = parsed.mapNotNull { p ->
+            val amt = abs(p.amount)
+            if (!amt.isFinite() || amt == 0.0) return@mapNotNull null
             Transaction(
                 id = UUID.randomUUID().toString(),
-                title = p.description.ifBlank { "Imported transaction" },
-                amount = p.amount,
+                title = p.description.ifBlank { "Imported transaction" }.trim(),
+                amount = amt,
                 type = p.type,
                 category = p.category.ifBlank { "Uncategorized" },
-                date = parseStatementDate(p.date),
-                isRecurring = false
+                date = parseStatementDate(p.date)
             )
         }
-        transactions = transactions + newTransactions
+        val fresh = candidates.filter { dedupeKey(it.date.toLocalDate(), it.amount, it.title) !in existingKeys }
+        val skipped = parsed.size - fresh.size
+
         scanState = StatementScanState.Idle
-        viewModelScope.launch {
-            newTransactions.forEach { txn ->
-                try {
-                    transactionRepository.add(uid, txn)
-                } catch (e: Exception) {
-                    AppLogger.e("importScannedTransactions", e)
-                    errorMessage = "Some imported transactions may not have saved. Please check your Activity list."
-                }
-            }
+        if (fresh.isEmpty()) {
+            infoMessage = "Those transactions are already in your Activity list."
+            return
+        }
+        if (skipped > 0) infoMessage = "Imported ${fresh.size}; skipped $skipped duplicate or invalid."
+
+        transactions = transactions + fresh
+        val importedIds = fresh.map { it.id }.toSet()
+        launchCatching(
+            "importScanned", "The import didn't save. Please try again.",
+            onFailure = { transactions = transactions.filterNot { it.id in importedIds } }
+        ) {
+            transactionRepository.addAll(u, fresh)   // atomic per-batch write
         }
     }
 
     private fun parseStatementDate(raw: String): LocalDateTime = try {
-        LocalDate.parse(raw).atStartOfDay()
+        LocalDate.parse(raw.trim()).atStartOfDay()
     } catch (e: DateTimeParseException) {
         LocalDateTime.now()
     }
 
-    private fun loadUserProfile(uid: String) {
-        viewModelScope.launch {
-            try {
-                currentUser = userRepository.getProfile(uid) ?: currentUser
-            } catch (e: Exception) {
-                AppLogger.e("loadUserProfile", e)
-                errorMessage = "Couldn't load your profile. Please try again."
-            }
-        }
-    }
+    // --- AI habit tip ---
 
-    private fun loadData() {
-        val uid = currentUser?.id ?: authRepository.currentUser?.uid ?: return
-        viewModelScope.launch {
-            try {
-                transactions = transactionRepository.getAll(uid)
-                goals = goalRepository.getAll(uid)
-            } catch (e: Exception) {
-                AppLogger.e("loadData", e)
-                errorMessage = "Couldn't load your data. Pull to refresh or try again."
-            }
-        }
-    }
-
-    /**
-     * Firebase Auth exceptions are already reasonably worded, but can still vary in tone/detail
-     * (and rarely leak class names). Map the common cases to a consistent, friendly voice; fall
-     * back to a generic message for anything unrecognized rather than showing raw text.
-     */
-    private fun friendlyAuthMessage(e: Exception, fallback: String): String {
-        val raw = e.message ?: return fallback
-        return when {
-            raw.contains("email address is already in use", ignoreCase = true) ->
-                "That email is already registered — try logging in instead."
-            raw.contains("badly formatted", ignoreCase = true) ||
-                raw.contains("invalid email", ignoreCase = true) ->
-                "That doesn't look like a valid email address."
-            raw.contains("password is invalid", ignoreCase = true) ||
-                raw.contains("no user record", ignoreCase = true) ||
-                raw.contains("supplied auth credential is incorrect", ignoreCase = true) ->
-                "Incorrect email or password."
-            raw.contains("network error", ignoreCase = true) ->
-                "Network issue — check your connection and try again."
-            raw.contains("too many", ignoreCase = true) ->
-                "Too many attempts. Please wait a moment and try again."
-            else -> fallback
-        }
-    }
-
-    // --- Recommended habits (AI spending tip) ---
-
-    var habitTipState by mutableStateOf<HabitTipState>(HabitTipState.Idle)
-        private set
+    var habitTipState by mutableStateOf<HabitTipState>(HabitTipState.Idle); private set
+    private var tipJob: Job? = null
 
     fun fetchHabitTip() {
-        if (categorySpendTotals.isEmpty()) return
+        if (categorySpendTotals.isEmpty() || habitTipState is HabitTipState.Loading) return
         habitTipState = HabitTipState.Loading
-        viewModelScope.launch {
+        tipJob = viewModelScope.launch {
             try {
                 val tip = geminiRepository.suggestSpendingHabitTip(
                     categoryTotals = categorySpendTotals,
@@ -527,11 +612,30 @@ class AppViewModel(
                     monthlyExpenses = monthlyExpenses
                 )
                 habitTipState = HabitTipState.Success(tip)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLogger.e("fetchHabitTip", e)
-                habitTipState = HabitTipState.Error("Couldn't get a tip right now (${e.message ?: "unknown error"}).")
+                habitTipState = HabitTipState.Error("Couldn't get a tip right now. Please try again.")
             }
         }
+    }
+
+    fun dismissHabitTip() { tipJob?.cancel(); habitTipState = HabitTipState.Idle }
+
+    private fun friendlyAuthMessage(e: Exception, fallback: String): String = when (e) {
+        is FirebaseNetworkException -> "Network issue — check your connection and try again."
+        is FirebaseTooManyRequestsException -> "Too many attempts. Please wait a moment and try again."
+        is FirebaseAuthException -> when (e.errorCode) {
+            "ERROR_EMAIL_ALREADY_IN_USE" -> "That email is already registered — try logging in instead."
+            "ERROR_INVALID_EMAIL" -> "That doesn't look like a valid email address."
+            "ERROR_WEAK_PASSWORD" -> "Choose a stronger password (at least 8 characters)."
+            "ERROR_WRONG_PASSWORD", "ERROR_USER_NOT_FOUND", "ERROR_INVALID_CREDENTIAL" -> "Incorrect email or password."
+            "ERROR_USER_DISABLED" -> "This account has been disabled."
+            "ERROR_TOO_MANY_REQUESTS" -> "Too many attempts. Please wait a moment and try again."
+            else -> fallback
+        }
+        else -> fallback
     }
 }
 

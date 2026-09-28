@@ -25,6 +25,7 @@ import com.example.smartstudent.theme.StudentGray600
 import com.example.smartstudent.theme.StudentShapes
 import com.example.smartstudent.ui.components.PrimaryPillButton
 import com.example.smartstudent.ui.components.SecondaryPillButton
+import androidx.compose.foundation.layout.systemBarsPadding
 
 @Composable
 fun EnableNotificationsScreen(
@@ -34,6 +35,7 @@ fun EnableNotificationsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -51,7 +53,7 @@ fun EnableNotificationsScreen(
             Text("Enable notifications", style = MaterialTheme.typography.headlineMedium)
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "Stay on top of your finances with important updates about your progress and balances. Choose to receive balance notifications daily or weekly.",
+                "Get reminders and updates about your budget and savings progress. You can turn this off any time in your phone\u2019s settings.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = StudentGray600
             )

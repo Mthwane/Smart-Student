@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import com.example.smartstudent.theme.PillShape
 import com.example.smartstudent.theme.StudentGray200
 import com.example.smartstudent.theme.StudentGray400
+import androidx.compose.foundation.layout.size
 
 /**
  * Full-width solid pill button — primary CTA style seen throughout the reference
@@ -47,7 +48,7 @@ fun PrimaryPillButton(
     ) {
         if (loading) {
             CircularProgressIndicator(
-                modifier = Modifier.height(20.dp),
+                modifier = Modifier.size(20.dp),
                 color = MaterialTheme.colorScheme.onPrimary,
                 strokeWidth = 2.dp
             )

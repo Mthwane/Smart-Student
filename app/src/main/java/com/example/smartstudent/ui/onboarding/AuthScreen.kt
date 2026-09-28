@@ -7,11 +7,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,10 +54,12 @@ fun AuthScreen(
     onBack: () -> Unit,
     onSignUp: (SignUpDetails) -> Unit,
     onLogIn: (email: String, password: String) -> Unit,
+    onForgotPassword: (email: String) -> Unit,
     onGoogleSignIn: () -> Unit,
     googleSignInAvailable: Boolean,
     loading: Boolean = false,
-    errorMessage: String? = null
+    errorMessage: String? = null,
+    infoMessage: String? = null
 ) {
     var mode by remember { mutableStateOf(initialMode) }
     var firstName by remember { mutableStateOf("") }
@@ -62,20 +69,24 @@ fun AuthScreen(
     var passwordVisible by remember { mutableStateOf(false) }
 
     val isSignUp = mode == AuthMode.SIGN_UP
+    val trimmedEmail = email.trim()
     val canSubmit = if (isSignUp) {
-        firstName.isNotBlank() && lastName.isNotBlank() && email.contains("@") && password.length >= 8
+        firstName.isNotBlank() && lastName.isNotBlank() && trimmedEmail.contains("@") && password.length >= 8
     } else {
-        email.contains("@") && password.isNotBlank()
+        trimmedEmail.contains("@") && password.isNotBlank()
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
         IconButton(onClick = onBack, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
         }
 
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .imePadding()
                 .padding(horizontal = 24.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -102,9 +113,9 @@ fun AuthScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.HorizontalDivider(modifier = Modifier.weight(1f), color = StudentGray200)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = StudentGray200)
                     Text("  or use email  ", style = MaterialTheme.typography.labelMedium, color = StudentGray600)
-                    androidx.compose.material3.HorizontalDivider(modifier = Modifier.weight(1f), color = StudentGray200)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = StudentGray200)
                 }
                 Spacer(modifier = Modifier.height(20.dp))
 
@@ -126,6 +137,7 @@ fun AuthScreen(
                     value = password,
                     onValueChange = { password = it },
                     label = if (isSignUp) "Password (min. 8 characters)" else "Password",
+                    keyboardType = KeyboardType.Password,
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
@@ -137,9 +149,18 @@ fun AuthScreen(
                     }
                 )
 
+                if (!isSignUp) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextLinkButton(text = "Forgot password?", onClick = { onForgotPassword(trimmedEmail) })
+                }
+
                 if (errorMessage != null) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(errorMessage, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                }
+                if (infoMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(infoMessage, style = MaterialTheme.typography.bodyMedium, color = StudentGray600)
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -156,13 +177,14 @@ fun AuthScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(24.dp))
             PrimaryPillButton(
                 text = if (isSignUp) "Sign up" else "Log in",
                 onClick = {
                     if (isSignUp) {
-                        onSignUp(SignUpDetails(firstName, lastName, email, password))
+                        onSignUp(SignUpDetails(firstName.trim(), lastName.trim(), trimmedEmail, password))
                     } else {
-                        onLogIn(email, password)
+                        onLogIn(trimmedEmail, password)
                     }
                 },
                 enabled = canSubmit,

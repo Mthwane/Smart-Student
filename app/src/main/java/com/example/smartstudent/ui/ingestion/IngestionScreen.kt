@@ -1,9 +1,7 @@
 package com.example.smartstudent.ui.ingestion
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -25,18 +23,23 @@ import com.example.smartstudent.ui.components.CategoryDropdown
 import com.example.smartstudent.ui.components.PrimaryPillButton
 import com.example.smartstudent.ui.components.StudentTextField
 import com.example.smartstudent.ui.components.TransactionTypeToggle
+import com.example.smartstudent.util.formScreen
+import com.example.smartstudent.util.parseAmount
 
 /** Manual transaction entry — the "ingestion" flow's simplest path (bulk import lives in the statement scan flow). */
 @Composable
 fun IngestionScreen(
     knownCategories: List<String>,
-    onSave: (title: String, amount: Double, category: String, type: TransactionType) -> Unit
+    onSave: (title: String, amount: Double, category: String, type: TransactionType) -> Unit,
+    initialType: TransactionType = TransactionType.EXPENSE,
+    initialCategory: String = ""
 ) {
     var title by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf(TransactionType.EXPENSE) }
-    var categoryTouchedByUser by remember { mutableStateOf(false) }
+    var category by remember { mutableStateOf(initialCategory) }
+    var type by remember { mutableStateOf(initialType) }
+    var categoryTouchedByUser by remember { mutableStateOf(initialCategory.isNotBlank()) }
+    var submitted by remember { mutableStateOf(false) }   // guards against a double tap saving twice
 
     // Auto-suggest a category from the title as the user types, using the local
     // keyword rule set — unless they've already picked/typed their own category.
@@ -50,11 +53,9 @@ fun IngestionScreen(
         (DefaultCategoryRules.defaultCategories + knownCategories).distinct()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-    ) {
+    val parsedAmount = parseAmount(amount)
+
+    Column(modifier = Modifier.formScreen().padding(24.dp)) {
         Text("Add transaction", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(4.dp))
         Text(
@@ -89,10 +90,12 @@ fun IngestionScreen(
         PrimaryPillButton(
             text = "Save transaction",
             onClick = {
-                val parsed = amount.toDoubleOrNull() ?: 0.0
-                onSave(title, parsed, category.ifBlank { "Other" }, type)
+                parsedAmount?.let {
+                    submitted = true
+                    onSave(title.trim(), it, category.ifBlank { "Other" }, type)
+                }
             },
-            enabled = title.isNotBlank() && amount.toDoubleOrNull() != null,
+            enabled = title.isNotBlank() && parsedAmount != null && !submitted,
             modifier = Modifier.fillMaxWidth()
         )
     }

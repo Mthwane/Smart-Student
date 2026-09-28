@@ -36,6 +36,7 @@ import com.example.smartstudent.ui.components.MascotBird
 import com.example.smartstudent.ui.components.MascotMood
 import com.example.smartstudent.ui.components.PrimaryPillButton
 import com.example.smartstudent.ui.components.SecondaryPillButton
+import androidx.compose.foundation.layout.systemBarsPadding
 
 @Composable
 fun WelcomeScreen(
@@ -45,6 +46,7 @@ fun WelcomeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.Start
     ) {

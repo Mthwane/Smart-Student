@@ -2,6 +2,7 @@ package com.example.smartstudent.ui.ingestion
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,10 @@ import com.example.smartstudent.ui.components.ResultOutcome
 import com.example.smartstudent.ui.components.ResultSplash
 import com.example.smartstudent.ui.main.StatementScanState
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.Checkbox
+import androidx.compose.runtime.mutableStateListOf
 
 @Composable
 fun StatementScanScreen(
@@ -62,7 +67,8 @@ fun StatementScanScreen(
             title = "Scan didn't work out",
             message = scanState.message,
             actionLabel = "Try again",
-            onAction = onRetry
+            onAction = onRetry,
+            applySystemBars = true
         )
         return
     }
@@ -70,13 +76,14 @@ fun StatementScanScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .padding(24.dp)
     ) {
         Text("Scan bank statement", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            "Upload a photo or PDF of a statement — everything's read on your device, then Gemini " +
-                "categorizes transactions and checks them against your goals.",
+            "Upload a photo or PDF of a statement. Text is read on your device; the extracted text " +
+                "(with long account/card numbers removed) is then sent to Google's Gemini to categorize it.",
             style = MaterialTheme.typography.bodyMedium,
             color = StudentGray600
         )
@@ -156,6 +163,9 @@ private fun LoadingState() {
 
 @Composable
 private fun ResultState(analysis: StatementAnalysis, onImport: (List<ParsedTransaction>) -> Unit) {
+    val selected = remember(analysis) { mutableStateListOf(*Array(analysis.transactions.size) { true }) }
+    val chosen = analysis.transactions.filterIndexed { index, _ -> selected.getOrElse(index) { true } }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -196,16 +206,22 @@ private fun ResultState(analysis: StatementAnalysis, onImport: (List<ParsedTrans
             )
         }
 
-        items(analysis.transactions) { txn ->
-            ParsedTransactionRow(txn)
+        itemsIndexed(analysis.transactions) { index, txn ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = selected.getOrElse(index) { true },
+                    onCheckedChange = { checked -> if (index < selected.size) selected[index] = checked }
+                )
+                Box(modifier = Modifier.weight(1f)) { ParsedTransactionRow(txn) }
+            }
         }
 
         item {
             Spacer(modifier = Modifier.height(8.dp))
             PrimaryPillButton(
-                text = "Import all ${analysis.transactions.size} transactions",
-                onClick = { onImport(analysis.transactions) },
-                enabled = analysis.transactions.isNotEmpty(),
+                text = "Import ${chosen.size} transaction${if (chosen.size == 1) "" else "s"}",
+                onClick = { onImport(chosen) },
+                enabled = chosen.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -267,7 +283,7 @@ private fun ParsedTransactionRow(txn: ParsedTransaction) {
             Text("${txn.category} · ${txn.date}", style = MaterialTheme.typography.bodyMedium, color = StudentGray600)
         }
         Text(
-            (if (txn.type == TransactionType.INCOME) "+" else "-") + "R%.2f".format(txn.amount),
+            (if (txn.type == TransactionType.INCOME) "+" else "-") + "R%.2f".format(kotlin.math.abs(txn.amount)),
             style = MaterialTheme.typography.titleMedium,
             color = if (txn.type == TransactionType.INCOME) StudentGreen else MaterialTheme.colorScheme.onSurface
         )

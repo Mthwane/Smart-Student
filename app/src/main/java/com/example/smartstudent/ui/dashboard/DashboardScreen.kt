@@ -60,6 +60,12 @@ import com.example.smartstudent.ui.components.MascotMood
 import com.example.smartstudent.ui.components.categoryColorSoft
 import com.example.smartstudent.ui.components.categoryIcon
 import com.example.smartstudent.ui.main.HabitTipState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 
 @Composable
 fun DashboardScreen(
@@ -71,6 +77,7 @@ fun DashboardScreen(
     recentTransactions: List<Transaction>,
     habitTipState: HabitTipState,
     onFetchHabitTip: () -> Unit,
+    onDismissHabitTip: () -> Unit,
     onAddMoney: () -> Unit,
     onTransfer: () -> Unit,
     onSetBudget: () -> Unit,
@@ -84,17 +91,22 @@ fun DashboardScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         item {
-            AppHeader(title = "Dashboard", onSettingsClick = {}) {
-                MascotBird(size = 34.dp, mood = MascotMood.HAPPY, onTap = onLogout)
+            AppHeader(title = "Dashboard") {
+                MascotBird(size = 34.dp, mood = MascotMood.HAPPY)
             }
         }
 
         item {
-            StudentPulseBanner(studentFirstName = studentFirstName, onLogout = onLogout)
+            StudentPulseBanner(
+                studentFirstName = studentFirstName,
+                monthlyAllowance = monthlyAllowance,
+                overBudget = overBudget,
+                onLogout = onLogout
+            )
         }
 
         item {
@@ -114,7 +126,8 @@ fun DashboardScreen(
         item {
             GeminiSmartHabitCard(
                 habitTipState = habitTipState,
-                onFetchTip = onFetchHabitTip
+                onFetchTip = onFetchHabitTip,
+                onDismiss = onDismissHabitTip
             )
         }
 
@@ -170,7 +183,7 @@ fun DashboardScreen(
                 ) {
                     Icon(Icons.Filled.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Scan Receipt", fontWeight = FontWeight.SemiBold)
+                    Text("Scan Statement", fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = onAddManually,
@@ -188,7 +201,18 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun StudentPulseBanner(studentFirstName: String, onLogout: () -> Unit) {
+private fun StudentPulseBanner(
+    studentFirstName: String,
+    monthlyAllowance: Double,
+    overBudget: Boolean,
+    onLogout: () -> Unit
+) {
+    var showLogoutConfirm by remember { mutableStateOf(false) }
+    val headline = when {
+        monthlyAllowance <= 0.0 -> "Hey $studentFirstName, set a monthly allowance to track your budget."
+        overBudget -> "Hey $studentFirstName, you're over budget this month."
+        else -> "Hey $studentFirstName, you're on track!"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -209,7 +233,7 @@ private fun StudentPulseBanner(studentFirstName: String, onLogout: () -> Unit) {
                 Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(StudentGreen))
             }
             Text(
-                "Hey $studentFirstName, you're on track!",
+                headline,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -218,7 +242,20 @@ private fun StudentPulseBanner(studentFirstName: String, onLogout: () -> Unit) {
             Icons.AutoMirrored.Filled.Logout,
             contentDescription = "Log out",
             tint = StudentBrown600,
-            modifier = Modifier.size(20.dp).clickable(onClick = onLogout)
+            modifier = Modifier.size(20.dp).clickable { showLogoutConfirm = true }
+        )
+    }
+
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Log out?") },
+            confirmButton = {
+                TextButton(onClick = { showLogoutConfirm = false; onLogout() }) { Text("Log out") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) { Text("Cancel") }
+            }
         )
     }
 }
@@ -246,17 +283,7 @@ private fun TotalBalanceCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("TOTAL BALANCE", style = MaterialTheme.typography.labelMedium, color = StudentTaupeOnBlack)
-            Row(
-                modifier = Modifier
-                    .background(Color.White.copy(alpha = 0.1f), PillShape)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Filled.TrendingUp, contentDescription = null, tint = StudentGold, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Live", style = MaterialTheme.typography.labelSmall, color = StudentGold)
-            }
+            Text("NET BALANCE", style = MaterialTheme.typography.labelMedium, color = StudentTaupeOnBlack)
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
@@ -338,7 +365,7 @@ private fun TotalBalanceCard(
 private val StudentTaupeOnBlack = Color(0xFFBFBBB0)
 
 @Composable
-private fun GeminiSmartHabitCard(habitTipState: HabitTipState, onFetchTip: () -> Unit) {
+private fun GeminiSmartHabitCard(habitTipState: HabitTipState, onFetchTip: () -> Unit, onDismiss: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -375,7 +402,7 @@ private fun GeminiSmartHabitCard(habitTipState: HabitTipState, onFetchTip: () ->
             is HabitTipState.Success -> {
                 Text(habitTipState.tip, style = MaterialTheme.typography.bodyMedium, color = StudentBrown800)
                 Spacer(modifier = Modifier.height(12.dp))
-                HabitCardButtons(primaryLabel = "Try This Habit", onPrimary = onFetchTip, secondaryLabel = "Dismiss")
+                HabitCardButtons(primaryLabel = "Try This Habit", onPrimary = onFetchTip, secondaryLabel = "Dismiss", onSecondary = onDismiss)
             }
             is HabitTipState.Error -> {
                 Text(habitTipState.message, style = MaterialTheme.typography.bodyMedium, color = StudentBrown600)
@@ -387,7 +414,12 @@ private fun GeminiSmartHabitCard(habitTipState: HabitTipState, onFetchTip: () ->
 }
 
 @Composable
-private fun HabitCardButtons(primaryLabel: String, onPrimary: () -> Unit, secondaryLabel: String? = null) {
+private fun HabitCardButtons(
+    primaryLabel: String,
+    onPrimary: () -> Unit,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Button(
             onClick = onPrimary,
@@ -399,7 +431,7 @@ private fun HabitCardButtons(primaryLabel: String, onPrimary: () -> Unit, second
         }
         if (secondaryLabel != null) {
             Button(
-                onClick = {},
+                onClick = { onSecondary?.invoke() },
                 shape = PillShape,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.5f), contentColor = StudentBrown800),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)

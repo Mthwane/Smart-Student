@@ -6,7 +6,6 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.ksp)
     alias(libs.plugins.google.services)
 }
 
@@ -20,6 +19,8 @@ if (localPropertiesFile.exists()) {
     }
 }
 val geminiApiKey: String = localProperties.getProperty("gemini.api.key", "")
+// Override with gemini.model=... in local.properties. thinkingLevel is a Gemini 3 setting.
+val geminiModel: String = localProperties.getProperty("gemini.model", "gemini-3.6-flash")
 
 android {
     namespace = "com.example.smartstudent"
@@ -37,6 +38,7 @@ android {
         }
 
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+        buildConfigField("String", "GEMINI_MODEL", "\"$geminiModel\"")
     }
 
     buildTypes {
@@ -76,7 +78,6 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.serialization.json)
 
     // Firebase (Auth + Firestore) — versions aligned via the Firebase BoM
@@ -92,4 +93,6 @@ dependencies {
     implementation(libs.mlkit.text.recognition)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    testImplementation(libs.junit)
 }

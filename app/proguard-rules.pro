@@ -1,1 +1,6 @@
-# Add project specific ProGuard rules here.
+-keepattributes *Annotation*, Signature
+-keepclassmembers class com.example.smartstudent.data.remote.** { *; }
+-keep class com.example.smartstudent.data.repository.UserProfileDto { *; }
+-keep,includedescriptorclasses class com.example.smartstudent.**$$serializer { *; }
+-keepclassmembers class com.example.smartstudent.** { *** Companion; }
+-keepclasseswithmembers class com.example.smartstudent.** { kotlinx.serialization.KSerializer serializer(...); }

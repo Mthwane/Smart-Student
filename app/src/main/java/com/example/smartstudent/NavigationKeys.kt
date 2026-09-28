@@ -21,6 +21,8 @@ object NavigationKeys {
     const val GOALS = "main/goals"
     const val ANALYTICS = "main/analytics"
     const val INGESTION = "main/ingestion"
+    const val INGESTION_ROUTE = "main/ingestion?type={type}&category={category}"
+    fun ingestion(type: String, category: String = "") = "main/ingestion?type=$type&category=$category"
     const val STATEMENT_SCAN = "main/statement_scan"
 
     // Goals sub-flow

@@ -21,18 +21,19 @@ data class TransactionDto(
     val category: String = "",
     val dateMillis: Long = 0L,
     val note: String? = null,
-    val isRecurring: Boolean = false
+    // Named "recurring" so it matches what Firestore derives from the Kotlin isRecurring getter.
+    val recurring: Boolean = false
 ) {
     fun toDomain(): Transaction = Transaction(
         id = id,
         title = title,
         merchant = merchant,
         amount = amount,
-        type = TransactionType.valueOf(type),
+        type = runCatching { TransactionType.valueOf(type) }.getOrDefault(TransactionType.EXPENSE),
         category = category,
         date = LocalDateTime.ofInstant(Instant.ofEpochMilli(dateMillis), ZoneId.systemDefault()),
         note = note,
-        isRecurring = isRecurring
+        isRecurring = recurring
     )
 
     companion object {
@@ -45,7 +46,7 @@ data class TransactionDto(
             category = transaction.category,
             dateMillis = transaction.date.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
             note = transaction.note,
-            isRecurring = transaction.isRecurring
+            recurring = transaction.isRecurring
         )
     }
 }

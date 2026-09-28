@@ -1,5 +1,29 @@
 # Changelog
 
+## v9 — Stability, security and correctness pass
+
+- **Auth/profile:** Google sign-in no longer resets the profile (`getOrCreateProfile`); login/auto-login
+  await the full profile+data load before proceeding; email verification now actually loads the profile;
+  added password reset, a resend cooldown, sign-out from the verify screen, and Firebase error-code-based
+  messages instead of English string matching.
+- **Gemini:** API key sent via header instead of the URL; model name configurable; JSON response mode with
+  a much larger token budget and truncation detection; long statements are chunked instead of silently cut
+  at 12,000 characters; account/card numbers are redacted before anything is sent.
+- **OCR:** PDF pages are rendered and recognized one at a time (bitmaps recycled), with a page cap, instead
+  of holding every page in memory at once.
+- **Data integrity:** imported amounts are `abs()`'d, deduplicated against existing transactions, written in
+  atomic batches, and each row can be unticked before import; one malformed Firestore document no longer
+  breaks the whole transactions/goals list.
+- **UI:** a global snackbar surfaces errors on every screen (not just Auth); amount fields accept
+  `1 500,50`-style input and reject 0/negative/NaN; all onboarding/ingestion/goal-create screens respect the
+  keyboard and system bars; the mascot no longer doubles as a logout button; Dismiss, "Learn about Smart
+  bills", Add, and Transfer are wired up; the pie chart's ring and legend now agree.
+- **Goals:** emoji and an optional target date are settable at creation; "Add money" also records a matching
+  "Savings" transaction so the balance reflects it; a completed goal shows as reached instead of a stale
+  percentage.
+- **Notifications:** a real `POST_NOTIFICATIONS` permission request on Android 13+. Scheduling itself
+  (daily/weekly digests) is not implemented — the copy on the opt-in screen no longer promises it.
+
 ## v8 — Auto-login, monthly allowance input, edit/delete transactions
 
 **Auto-login**

@@ -33,7 +33,7 @@ import com.example.smartstudent.theme.StudentBrown800
 @Composable
 fun AppHeader(
     title: String,
-    onSettingsClick: () -> Unit = {},
+    onSettingsClick: (() -> Unit)? = null,
     avatar: @Composable () -> Unit
 ) {
     Row(
@@ -67,8 +67,10 @@ fun AppHeader(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onSettingsClick) {
-                Icon(Icons.Filled.Tune, contentDescription = "Settings", tint = StudentBrown800)
+            if (onSettingsClick != null) {
+                IconButton(onClick = onSettingsClick) {
+                    Icon(Icons.Filled.Tune, contentDescription = "Settings", tint = StudentBrown800)
+                }
             }
             avatar()
         }

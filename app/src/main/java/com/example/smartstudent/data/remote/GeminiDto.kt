@@ -13,6 +13,7 @@ data class GeminiRequest(
 @Serializable
 data class GeminiGenerationConfig(
     val maxOutputTokens: Int? = null,
+    val responseMimeType: String? = null,
     val thinkingConfig: GeminiThinkingConfig? = null
 )
 
@@ -22,16 +23,16 @@ data class GeminiThinkingConfig(
 )
 
 @Serializable
-data class GeminiContent(val parts: List<GeminiPart>)
+data class GeminiContent(val parts: List<GeminiPart> = emptyList())
 
 @Serializable
-data class GeminiPart(val text: String)
+data class GeminiPart(val text: String? = null, val thought: Boolean? = null)
 
 @Serializable
 data class GeminiResponse(val candidates: List<GeminiCandidate> = emptyList())
 
 @Serializable
-data class GeminiCandidate(val content: GeminiContent? = null)
+data class GeminiCandidate(val content: GeminiContent? = null, val finishReason: String? = null)
 
 // --- The JSON schema we instruct the model to reply with (parsed out of GeminiResponse's text) ---
 

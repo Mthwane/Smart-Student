@@ -14,27 +14,35 @@ import com.example.smartstudent.domain.model.ParsedTransaction
 import com.example.smartstudent.domain.model.SavingsGoal
 import com.example.smartstudent.domain.model.StatementAnalysis
 import com.example.smartstudent.domain.model.TransactionType
+import com.example.smartstudent.util.AppLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import java.io.BufferedReader
-import java.io.OutputStreamWriter
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 /**
- * Sends OCR'd bank statement text to Gemini (free tier, Google AI Studio) and asks it
- * to return structured JSON: parsed transactions, overspending categories, budget
- * status, and per-goal progress notes. Uses a plain HttpURLConnection rather than
- * pulling in Retrofit/OkHttp, since this is the only REST call in the app.
+ * Sends OCR'd bank statement text to Gemini (Google AI Studio) and asks it to return
+ * structured JSON: parsed transactions, overspending categories, budget status, and
+ * per-goal progress notes. Uses a plain HttpURLConnection rather than pulling in
+ * Retrofit/OkHttp, since this is the only REST call in the app.
+ *
+ * Privacy: long digit runs (account / card numbers) are redacted before anything leaves
+ * the device. The API key is sent in a header (not the URL) and the model name comes from
+ * BuildConfig.GEMINI_MODEL (set gemini.model in local.properties).
  */
 class GeminiRepository {
 
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private val model = "gemini-3.6-flash"
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true }
 
     companion object {
-        private const val MAX_STATEMENT_CHARS = 12_000
+        private const val CHUNK_CHARS = 10_000
+        private const val MAX_CHUNKS = 6
+        private const val ANALYSIS_TOKENS = 16_384
+        private const val TIP_TOKENS = 2_048
     }
 
     suspend fun analyzeStatement(
@@ -42,16 +50,19 @@ class GeminiRepository {
         currentGoals: List<SavingsGoal>,
         monthlyAllowance: Double
     ): StatementAnalysis = withContext(Dispatchers.IO) {
-        val prompt = buildPrompt(statementText, currentGoals, monthlyAllowance)
-        val responseText = callGemini(prompt, maxOutputTokens = 4096)
-        val dto = parseModelJson(responseText)
-        dto.toDomain()
+        val chunks = chunk(redact(statementText))
+        if (chunks.isEmpty()) throw IOException("Nothing to analyze")
+        val results = chunks.map { part ->
+            ensureActive()
+            val raw = callGemini(buildPrompt(part, currentGoals, monthlyAllowance), ANALYSIS_TOKENS, asJson = true)
+            parseModelJson(raw).toDomain()
+        }
+        merge(results)
     }
 
     /**
      * Short, friendly plain-text (not JSON) tip on how to spend less in the student's
-     * top expense categories this month. Kept separate from analyzeStatement since
-     * this is a much smaller, cheaper prompt with a plain-text reply.
+     * top expense categories this month.
      */
     suspend fun suggestSpendingHabitTip(
         categoryTotals: Map<String, Double>,
@@ -61,7 +72,7 @@ class GeminiRepository {
         val topCategories = categoryTotals.entries
             .sortedByDescending { it.value }
             .take(3)
-            .joinToString("\n") { "- ${it.key}: R${"%.2f".format(it.value)}" }
+            .joinToString("\n") { "- ${it.key}: R${fmt(it.value)}" }
 
         val prompt = """
             You are a friendly, sharp budgeting coach for a student finance app. Based on this
@@ -76,23 +87,54 @@ class GeminiRepository {
             Be specific and logical, not vague or generic. Do not lecture or moralize — keep the tone
             warm and casual, like a smart friend who's good with money, not a lecture from a textbook.
 
-            Monthly income so far: R${"%.2f".format(monthlyIncome)}
-            Monthly expenses so far: R${"%.2f".format(monthlyExpenses)}
+            Monthly income so far: R${fmt(monthlyIncome)}
+            Monthly expenses so far: R${fmt(monthlyExpenses)}
             Top spending categories:
             $topCategories
         """.trimIndent()
 
-        callGemini(prompt, maxOutputTokens = 500).trim()
+        callGemini(prompt, TIP_TOKENS, asJson = false).trim()
+    }
+
+    private fun fmt(v: Double) = String.format(Locale.US, "%.2f", v)
+
+    /** Strips long digit runs (account / card numbers) before anything leaves the device. */
+    private fun redact(text: String): String = text
+        .replace(Regex("\\b(?:\\d[ -]?){12,19}\\b"), "[card]")
+        .replace(Regex("\\b\\d{9,}\\b"), "[acct]")
+
+    /** Splits on line boundaries so long statements are analysed in pieces instead of being silently cut. */
+    private fun chunk(text: String): List<String> {
+        val out = mutableListOf<String>()
+        val sb = StringBuilder()
+        for (line in text.lines()) {
+            if (sb.isNotEmpty() && sb.length + line.length + 1 > CHUNK_CHARS) {
+                out += sb.toString(); sb.clear()
+            }
+            sb.appendLine(line.take(CHUNK_CHARS))
+        }
+        if (sb.isNotBlank()) out += sb.toString()
+        if (out.size > MAX_CHUNKS) AppLogger.w("Gemini", "Statement truncated to $MAX_CHUNKS chunks")
+        return out.take(MAX_CHUNKS)
+    }
+
+    private fun merge(parts: List<StatementAnalysis>): StatementAnalysis {
+        val budget = when {
+            parts.any { it.budgetStatus == BudgetStatus.OVER_BUDGET } -> BudgetStatus.OVER_BUDGET
+            else -> parts.map { it.budgetStatus }.lastOrNull { it != BudgetStatus.UNKNOWN } ?: BudgetStatus.UNKNOWN
+        }
+        return StatementAnalysis(
+            transactions = parts.flatMap { it.transactions },
+            overspendingCategories = parts.flatMap { it.overspendingCategories }.distinct(),
+            budgetStatus = budget,
+            goalInsights = parts.first().goalInsights,
+            summary = parts.first().summary
+        )
     }
 
     private fun buildPrompt(statementText: String, goals: List<SavingsGoal>, monthlyAllowance: Double): String {
         val goalsDescription = if (goals.isEmpty()) "No savings goals set yet." else
-            goals.joinToString("\n") { "- ${it.name}: R${it.savedAmount} saved of R${it.targetAmount} target" }
-
-        // Cap how much OCR text goes into the prompt. Bank statements rarely need
-        // more than this to capture every transaction line, and a much longer prompt
-        // both costs more and takes noticeably longer for the model to process.
-        val trimmedStatementText = statementText.take(MAX_STATEMENT_CHARS)
+            goals.joinToString("\n") { "- ${it.name}: R${fmt(it.savedAmount)} saved of R${fmt(it.targetAmount)} target" }
 
         return """
             You are a personal finance assistant analyzing a bank statement for a student budgeting app.
@@ -101,9 +143,10 @@ class GeminiRepository {
 
             Extract every individual transaction you can find, categorize each one into a short category
             label (e.g. "Groceries", "Coffee", "Transport", "Rent", "Entertainment", "Income", "Transfer"),
-            and analyze overall spending.
+            and analyze overall spending. "amount" must be a POSITIVE number (absolute value, no currency
+            symbol, no thousands separators); the direction is carried by "type".
 
-            The student's monthly allowance/budget is: R$monthlyAllowance (0 means not set).
+            The student's monthly allowance/budget is: R${fmt(monthlyAllowance)} (0 means not set).
             The student's current savings goals are:
             $goalsDescription
 
@@ -123,47 +166,61 @@ class GeminiRepository {
 
             Bank statement OCR text:
             ---
-            $trimmedStatementText
+            $statementText
             ---
         """.trimIndent()
     }
 
-    private fun callGemini(prompt: String, maxOutputTokens: Int = 2048, thinkingLevel: String = "low"): String {
+    private fun callGemini(prompt: String, maxOutputTokens: Int, asJson: Boolean, thinkingLevel: String = "low"): String {
         val apiKey = BuildConfig.GEMINI_API_KEY
-        require(apiKey.isNotBlank()) { "Gemini API key is missing. Add gemini.api.key to local.properties." }
+        if (apiKey.isBlank()) throw IllegalStateException("Gemini API key is missing. Add gemini.api.key to local.properties.")
 
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/${BuildConfig.GEMINI_MODEL}:generateContent")
         val connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"
-        connection.setRequestProperty("Content-Type", "application/json")
-        connection.doOutput = true
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 45_000
+        try {
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("x-goog-api-key", apiKey)   // header, not the URL
+            connection.doOutput = true
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 90_000
 
-        val requestBody = json.encodeToString(
-            GeminiRequest.serializer(),
-            GeminiRequest(
-                contents = listOf(GeminiContent(parts = listOf(GeminiPart(text = prompt)))),
-                generationConfig = GeminiGenerationConfig(
-                    maxOutputTokens = maxOutputTokens,
-                    thinkingConfig = GeminiThinkingConfig(thinkingLevel = thinkingLevel)
+            val requestBody = json.encodeToString(
+                GeminiRequest.serializer(),
+                GeminiRequest(
+                    contents = listOf(GeminiContent(parts = listOf(GeminiPart(text = prompt)))),
+                    generationConfig = GeminiGenerationConfig(
+                        maxOutputTokens = maxOutputTokens,
+                        responseMimeType = if (asJson) "application/json" else null,
+                        thinkingConfig = GeminiThinkingConfig(thinkingLevel = thinkingLevel)
+                    )
                 )
             )
-        )
+            connection.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
 
-        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { it.write(requestBody) }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val responseBody = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
 
-        val responseCode = connection.responseCode
-        val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-        val responseBody = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+            if (responseCode !in 200..299) {
+                // Logged for debugging, never surfaced to the UI.
+                AppLogger.e("Gemini", "HTTP $responseCode: ${responseBody.take(500)}")
+                throw IOException("Gemini HTTP $responseCode")
+            }
 
-        if (responseCode !in 200..299) {
-            error("Gemini API error ($responseCode): $responseBody")
+            val candidate = json.decodeFromString(GeminiResponse.serializer(), responseBody).candidates.firstOrNull()
+                ?: throw IOException("Gemini returned no candidates")
+            // Thinking models can emit "thought" parts first; only join the real answer text.
+            val text = candidate.content?.parts.orEmpty()
+                .filter { it.thought != true }
+                .mapNotNull { it.text }
+                .joinToString("")
+            if (candidate.finishReason == "MAX_TOKENS") throw IOException("Gemini response was truncated")
+            if (text.isBlank()) throw IOException("Gemini returned no content")
+            return text
+        } finally {
+            connection.disconnect()
         }
-
-        val parsed = json.decodeFromString(GeminiResponse.serializer(), responseBody)
-        val text = parsed.candidates.firstOrNull()?.content?.parts?.firstOrNull()?.text
-        return text ?: error("Gemini returned no content")
     }
 
     private fun parseModelJson(rawText: String): StatementAnalysisDto {

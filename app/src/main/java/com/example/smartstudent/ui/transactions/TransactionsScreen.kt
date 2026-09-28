@@ -65,6 +65,8 @@ import com.example.smartstudent.ui.components.TransactionTypeToggle
 import com.example.smartstudent.ui.components.categoryColorSoft
 import com.example.smartstudent.ui.components.categoryIcon
 import java.time.format.DateTimeFormatter
+import com.example.smartstudent.util.editableAmount
+import com.example.smartstudent.util.parseAmount
 
 private sealed class ActivityFilter {
     data object All : ActivityFilter()
@@ -432,10 +434,10 @@ private fun EditTransactionDialog(
     onDelete: () -> Unit
 ) {
     var title by remember { mutableStateOf(transaction.title) }
-    var amountText by remember { mutableStateOf("%.2f".format(transaction.amount)) }
+    var amountText by remember { mutableStateOf(editableAmount(transaction.amount)) }
     var category by remember { mutableStateOf(transaction.category) }
     var type by remember { mutableStateOf(transaction.type) }
-    val amount = amountText.toDoubleOrNull()
+    val amount = parseAmount(amountText)
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,

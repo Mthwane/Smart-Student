@@ -10,6 +10,12 @@ data class CategoryRule(
     val category: String,
     val priority: Int = 0
 ) {
-    fun matches(merchantOrTitle: String): Boolean =
-        merchantOrTitle.contains(matchKeyword, ignoreCase = true)
+    private val regex: Regex by lazy {
+        val kw = Regex.escape(matchKeyword.trim())
+        // Word must START at a boundary; short keywords must also END at one.
+        val end = if (matchKeyword.trim().length <= 4) "(?![A-Za-z0-9])" else ""
+        Regex("(?<![A-Za-z0-9])$kw$end", RegexOption.IGNORE_CASE)
+    }
+
+    fun matches(text: String): Boolean = regex.containsMatchIn(text)
 }

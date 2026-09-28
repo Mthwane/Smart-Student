@@ -25,18 +25,22 @@ import com.example.smartstudent.theme.StudentGray600
 import com.example.smartstudent.theme.StudentShapes
 import com.example.smartstudent.ui.components.PrimaryPillButton
 import com.example.smartstudent.ui.components.TextLinkButton
+import androidx.compose.foundation.layout.systemBarsPadding
 
 @Composable
 fun EmailVerificationScreen(
     email: String,
     onResend: () -> Unit,
     onIveVerified: () -> Unit,
+    onSignOut: () -> Unit,
+    resendCooldown: Int = 0,
     checking: Boolean = false,
     infoMessage: String? = null
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -72,7 +76,12 @@ fun EmailVerificationScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            TextLinkButton(text = "Resend email", onClick = onResend)
+            TextLinkButton(
+                text = if (resendCooldown > 0) "Resend in ${resendCooldown}s" else "Resend email",
+                onClick = onResend
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            TextLinkButton(text = "Use a different account", onClick = onSignOut)
         }
 
         PrimaryPillButton(

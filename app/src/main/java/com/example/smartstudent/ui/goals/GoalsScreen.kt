@@ -65,11 +65,13 @@ import com.example.smartstudent.ui.components.AppHeader
 import com.example.smartstudent.ui.components.MascotBird
 import com.example.smartstudent.ui.components.MascotMood
 import com.example.smartstudent.ui.components.StudentTextField
+import com.example.smartstudent.util.parseAmount
 
 @Composable
 fun GoalsScreen(
     goals: List<SavingsGoal>,
     onAddGoal: () -> Unit,
+    onPickKind: (GoalKind) -> Unit,
     onAddMoney: (goalId: String, amount: Double) -> Unit,
     onDeleteGoal: (goalId: String) -> Unit
 ) {
@@ -150,7 +152,7 @@ fun GoalsScreen(
             }
         }
 
-        item { StartNewVaultRow(onAddGoal = onAddGoal) }
+        item { StartNewVaultRow(onPick = onPickKind) }
     }
 
     goalPendingAddMoney?.let { goal ->
@@ -298,7 +300,7 @@ private fun iconFor(goal: SavingsGoal) = when {
 
 @Composable
 private fun GoalTargetCard(goal: SavingsGoal, onAddMoney: () -> Unit, onDelete: () -> Unit) {
-    val (tagLabel, tagColor) = tagFor(goal)
+    val (tagLabel, tagColor) = if (goal.isComplete) "REACHED" to StudentGreen else tagFor(goal)
     val achievedPct = (goal.progress * 100).toInt()
 
     Column(
@@ -312,7 +314,7 @@ private fun GoalTargetCard(goal: SavingsGoal, onAddMoney: () -> Unit, onDelete: 
                 modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(tagColor.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(iconFor(goal), contentDescription = null, tint = tagColor, modifier = Modifier.size(20.dp))
+                Text(goal.emoji, style = MaterialTheme.typography.titleMedium)
             }
             Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -334,7 +336,10 @@ private fun GoalTargetCard(goal: SavingsGoal, onAddMoney: () -> Unit, onDelete: 
 
         Spacer(modifier = Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("$achievedPct% Achieved", style = MaterialTheme.typography.labelMedium, color = StudentGreen, fontWeight = FontWeight.Bold)
+            Text(
+                if (goal.isComplete) "Goal reached \uD83C\uDF89" else "$achievedPct% Achieved",
+                style = MaterialTheme.typography.labelMedium, color = StudentGreen, fontWeight = FontWeight.Bold
+            )
             Text("R%,.2f to go".format((goal.targetAmount - goal.savedAmount).coerceAtLeast(0.0)), style = MaterialTheme.typography.labelMedium, color = StudentBrown600)
         }
         Spacer(modifier = Modifier.height(6.dp))
@@ -378,7 +383,7 @@ private fun GoalTargetCard(goal: SavingsGoal, onAddMoney: () -> Unit, onDelete: 
 }
 
 @Composable
-private fun StartNewVaultRow(onAddGoal: () -> Unit) {
+private fun StartNewVaultRow(onPick: (GoalKind) -> Unit) {
     Column {
         Text("What do you want to save for?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Text(
@@ -393,14 +398,14 @@ private fun StartNewVaultRow(onAddGoal: () -> Unit) {
                 title = "Savings Goal",
                 subtitle = "Flexible target and automated micro-saves.",
                 modifier = Modifier.weight(1f),
-                onClick = onAddGoal
+                onClick = { onPick(GoalKind.SAVINGS_GOAL) }
             )
             TemplateCard(
                 emoji = "🛡️",
                 title = "Smart Bill Buffer",
                 subtitle = "Safeguard rent, meal plans, or tuition.",
                 modifier = Modifier.weight(1f),
-                onClick = onAddGoal
+                onClick = { onPick(GoalKind.SMART_BILL) }
             )
         }
     }
@@ -435,7 +440,7 @@ private fun AddMoneyDialog(
     onConfirm: (Double) -> Unit
 ) {
     var amountText by remember { mutableStateOf("") }
-    val amount = amountText.toDoubleOrNull()
+    val amount = parseAmount(amountText)
 
     AlertDialog(
         onDismissRequest = onDismiss,

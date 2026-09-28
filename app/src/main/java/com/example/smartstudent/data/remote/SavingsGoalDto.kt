@@ -20,7 +20,7 @@ data class SavingsGoalDto(
     fun toDomain(): SavingsGoal = SavingsGoal(
         id = id,
         name = name,
-        kind = GoalKind.valueOf(kind),
+        kind = runCatching { GoalKind.valueOf(kind) }.getOrDefault(GoalKind.SAVINGS_GOAL),
         targetAmount = targetAmount,
         savedAmount = savedAmount,
         dueDate = dueDateMillis?.let {

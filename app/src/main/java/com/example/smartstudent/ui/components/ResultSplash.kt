@@ -46,6 +46,7 @@ import com.example.smartstudent.theme.StudentRedLight
 import com.example.smartstudent.util.SoundPlayer
 import kotlin.math.cos
 import kotlin.math.sin
+import androidx.compose.foundation.layout.systemBarsPadding
 
 enum class ResultOutcome { SUCCESS, FAILURE }
 
@@ -65,7 +66,8 @@ fun ResultSplash(
     message: String,
     modifier: Modifier = Modifier,
     actionLabel: String? = null,
-    onAction: (() -> Unit)? = null
+    onAction: (() -> Unit)? = null,
+    applySystemBars: Boolean = false
 ) {
     val isSuccess = outcome == ResultOutcome.SUCCESS
     val bg = if (isSuccess) StudentGreenLight else StudentRedLight
@@ -98,6 +100,7 @@ fun ResultSplash(
         modifier = modifier
             .fillMaxSize()
             .background(bg)
+            .then(if (applySystemBars) Modifier.systemBarsPadding() else Modifier)
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center

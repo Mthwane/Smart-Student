@@ -4,6 +4,7 @@ import com.example.smartstudent.data.remote.SavingsGoalDto
 import com.example.smartstudent.domain.model.SavingsGoal
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
+import com.example.smartstudent.util.AppLogger
 
 /** Stores each user's goals at users/{uid}/goals/{goalId}. */
 class GoalRepository(
@@ -12,10 +13,11 @@ class GoalRepository(
     private fun collection(uid: String) =
         firestore.collection("users").document(uid).collection("goals")
 
-    suspend fun getAll(uid: String): List<SavingsGoal> {
-        val snapshot = collection(uid).get().await()
-        return snapshot.documents.mapNotNull { it.toObject(SavingsGoalDto::class.java)?.toDomain() }
-    }
+    suspend fun getAll(uid: String): List<SavingsGoal> =
+        collection(uid).get().await().documents.mapNotNull { doc ->
+            try { doc.toObject(SavingsGoalDto::class.java)?.toDomain() }
+            catch (e: Exception) { AppLogger.e("Goals/${doc.id}", e); null }   // one bad doc must not break the list
+        }
 
     suspend fun add(uid: String, goal: SavingsGoal) {
         val dto = SavingsGoalDto.fromDomain(goal)

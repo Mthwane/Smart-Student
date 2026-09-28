@@ -26,12 +26,16 @@ import com.example.smartstudent.theme.StudentGray600
 data class PieSlice(val label: String, val value: Double, val color: Color)
 
 /** Builds slices from raw category totals, auto-assigning colors from the earth-tone palette. */
-fun buildPieSlices(categoryTotals: Map<String, Double>): List<PieSlice> =
-    categoryTotals.entries
-        .sortedByDescending { it.value }
-        .mapIndexed { index, entry ->
-            PieSlice(entry.key, entry.value, CategoryChartPalette[index % CategoryChartPalette.size])
-        }
+fun buildPieSlices(categoryTotals: Map<String, Double>): List<PieSlice> {
+    val sorted = categoryTotals.entries.sortedByDescending { it.value }
+    val top = sorted.take(5)
+    val rest = sorted.drop(5).sumOf { it.value }
+    // Combine anything past the top 5 into "Other" so the ring and the legend always agree.
+    val entries = top.map { it.key to it.value } + if (rest > 0) listOf("Other" to rest) else emptyList()
+    return entries.mapIndexed { index, (label, value) ->
+        PieSlice(label, value, CategoryChartPalette[index % CategoryChartPalette.size])
+    }
+}
 
 /**
  * Centered donut chart with a legend underneath (rather than side-by-side, which on
@@ -53,6 +57,9 @@ fun CategoryPieChart(
             if (total <= 0.0) return@Canvas
             var startAngle = -90f
             val strokeWidthPx = size.minDimension * 0.22f
+            // Inset the arc's bounding box by half the stroke width, or the ring clips at the canvas edge.
+            val arcTopLeft = androidx.compose.ui.geometry.Offset(strokeWidthPx / 2f, strokeWidthPx / 2f)
+            val arcSize = androidx.compose.ui.geometry.Size(size.width - strokeWidthPx, size.height - strokeWidthPx)
             slices.forEach { slice ->
                 val sweep = (slice.value / total * 360.0).toFloat()
                 drawArc(
@@ -60,6 +67,8 @@ fun CategoryPieChart(
                     startAngle = startAngle,
                     sweepAngle = sweep,
                     useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidthPx),
                 )
                 startAngle += sweep
@@ -69,7 +78,7 @@ fun CategoryPieChart(
         Spacer(modifier = Modifier.height(20.dp))
 
         Column(horizontalAlignment = Alignment.Start) {
-            slices.take(6).forEach { slice ->
+            slices.forEach { slice ->
                 Row(
                     modifier = Modifier.padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically

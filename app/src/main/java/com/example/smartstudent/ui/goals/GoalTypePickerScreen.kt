@@ -27,14 +27,22 @@ import com.example.smartstudent.theme.StudentGray600
 import com.example.smartstudent.ui.components.IconBadge
 import com.example.smartstudent.ui.components.OutlinedRowCard
 import com.example.smartstudent.ui.components.TextLinkButton
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 
 @Composable
 fun GoalTypePickerScreen(
     onClose: () -> Unit,
-    onPick: (GoalKind) -> Unit,
-    onLearnAboutSmartBills: () -> Unit
+    onPick: (GoalKind) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    var showSmartBillInfo by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
         IconButton(onClick = onClose, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) {
             Icon(Icons.Filled.Close, contentDescription = "Close")
         }
@@ -74,7 +82,21 @@ fun GoalTypePickerScreen(
             )
 
             Spacer(modifier = Modifier.height(16.dp))
-            TextLinkButton(text = "Learn about Smart bills", onClick = onLearnAboutSmartBills)
+            TextLinkButton(text = "Learn about Smart bills", onClick = { showSmartBillInfo = true })
         }
+    }
+
+    if (showSmartBillInfo) {
+        AlertDialog(
+            onDismissRequest = { showSmartBillInfo = false },
+            title = { Text("Smart bills") },
+            text = {
+                Text(
+                    "A Smart bill is a buffer you build up before a big recurring cost (rent, meal plan, " +
+                        "tuition) is due, so it never catches you short."
+                )
+            },
+            confirmButton = { TextButton(onClick = { showSmartBillInfo = false }) { Text("Got it") } }
+        )
     }
 }
